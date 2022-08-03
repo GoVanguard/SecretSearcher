@@ -199,7 +199,7 @@ def main():
 	parser.add_argument('-p', '--show-span', action='store_true', help='Whether or not to print the span of the match.')
 	parser.add_argument('-c', '--ignore-case', action='store_true', help='Whether or not to ignore the letter case during the search.')
 	parser.add_argument('-s', '--secrets', default=DEFAULT_SECRETS, help='A comma-separated list of target secrets (RegEx is supported).')
-	parser.add_argument('-l', '--limit', default='2MB', help='The maximum size to consider searchable files.')
+	parser.add_argument('-l', '--limit', default='32MB', help='The maximum size to consider searchable files.')
 	parser.add_argument('-b', '--border', default='40', help='The amount of characters to capture around each secret match.')
 	parser.add_argument('-v', '--verbosity', default=1, choices=['0', '1', '2', '3'], help='The level of verbosity to have.')
 	arguments = parser.parse_args()
