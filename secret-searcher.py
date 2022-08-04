@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
+
 from argparse import ArgumentParser
 from pathlib import Path
 from sys import exit
 from time import time
-from re import IGNORECASE, DOTALL, search, escape, finditer
+from re import IGNORECASE, DOTALL, search, finditer
 
 try:
     from colorama import Fore, Back, Style, init as initialize_colorama
@@ -74,11 +75,10 @@ def recursive_search(parent, configuration):
     findings = 0
 
     for child in parent.iterdir():
-        if (configuration['exclusions'] and check_path(child, configuration['exclusions'])) \
-        or (configuration['inclusions'] and not check_path(child, configuration['inclusions'])):
+        if ((configuration['exclusions'] and check_path(child, configuration['exclusions'])) or
+            (configuration['inclusions'] and not check_path(child, configuration['inclusions']))):
             if configuration['verbosity'] >= 2:
-                print(f'Skipping a file (not included or specifically excluded):', child)
-
+                print('Skipping a file (not included or specifically excluded):', child)
             continue
 
         if child.is_dir():
