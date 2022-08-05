@@ -4,7 +4,10 @@ from argparse import ArgumentParser
 from pathlib import Path
 from sys import exit
 from time import time
-from re import IGNORECASE, DOTALL, search, finditer
+from re import IGNORECASE, DOTALL, compile as RegEx, search
+from queue import Empty
+from multiprocessing import Queue, Event, Process, cpu_count
+from time import sleep
 
 try:
     from colorama import Fore, Back, Style, init as initialize_colorama
@@ -69,92 +72,95 @@ def bytes_to_string(data):
     return str(data)[2:-1]
 
 
-# We use recursive search instead of glob since it keeps unwanted children out of our search.
-def recursive_search(parent, configuration):
-    searched = 0
-    findings = 0
+# We build an index of searchable files before starting.
+def build_recursive_manifest(parent, context):
+    total_files = 0
 
     for child in parent.iterdir():
-        if ((configuration['exclusions'] and check_path(child, configuration['exclusions'])) or
-            (configuration['inclusions'] and not check_path(child, configuration['inclusions']))):
-            if configuration['verbosity'] >= 2:
-                print('Skipping a file (not included or specifically excluded):', child)
+        if ((context['exclusions'] and check_path(child, context['exclusions'])) or
+            (context['inclusions'] and not check_path(child, context['inclusions']))):
+            if context['verbosity'] >= 2:
+                context['message_queue'].put(f'Skipping a file (not included or specifically excluded): {child}')
             continue
 
+        if context['verbosity'] >= 2:
+            context['message_queue'].put(f'Skipping a file (not included or specifically excluded): {child}')
+
         if child.is_dir():
-            if configuration['verbosity'] >= 3:
-                print('Recursively searching directory:', child)
+            if context['verbosity'] >= 3:
+                context['message_queue'].put(f'Recursively searching directory: {child}')
 
-            sub_findings, sub_searched = recursive_search(child, configuration)
-            findings += sub_findings
-            searched += sub_searched
+            total_files += build_recursive_manifest(child, context)
         elif child.is_file():
-            if configuration['verbosity'] >= 3:
-                print('Searching file contents:', child)
-
             size = child.stat().st_size
 
-            if size > configuration['size_limit']:
-                if configuration['verbosity'] >= 1:
-                    human_size_limit = bytes_to_unit_size(configuration['size_limit'])
+            if size > context['size_limit']:
+                if context['verbosity'] >= 1:
+                    human_size_limit = bytes_to_unit_size(context['size_limit'])
                     human_size = bytes_to_unit_size(size)
-                    print(f'Skipping a file (too big; {human_size} > {human_size_limit}):', child)
+                    context['message_queue'].put(f'Skipping a file (too big; {human_size} > {human_size_limit}): {child}')
 
                 continue
 
-            # We read our file into memory for faster searching.
-            with open(child, 'rb') as file:
-                contents = file.read()
-                contents_size = file.tell()
+            total_files += 1
+            context['manifest_queue'].put(child)
 
-            # We begin the search!
-            for secret in configuration['secrets']:
-                regex = f'({secret})'
+    return total_files
 
-                # We setup our flags for the capture.
-                flags = DOTALL
 
-                if configuration['ignore_case']:
-                    flags |= IGNORECASE
+def recursive_search(context):
+    findings = 0
 
-                for match in finditer(regex.encode(), contents, flags=flags):
-                    findings += 1
+    while True:
+        # We try to get the child, and if we can't, we break out.
+        try:
+            child = context['manifest_queue'].get_nowait()
+        except Empty:
+            break
 
-                    # We estimate the line index.
-                    line = contents[:match.span()[0]].count(b'\n') + 1
+        # We read our file into memory for faster searching.
+        with open(child, 'rb') as file:
+            contents = file.read()
+            contents_size = file.tell()
 
-                    match_start, match_end = match.span()
+        # We begin the search!
+        for secret in context['secrets']:
+            for match in secret.finditer(contents):
+                findings += 1
 
-                    if __has_colorama:
-                        message = ''.join((
-                            f'{Back.MAGENTA}{Fore.WHITE}{Style.BRIGHT}{child}{Style.RESET_ALL}',
-                            ':',
-                            f'{Back.BLUE}{Fore.WHITE}{Style.BRIGHT}L{line}{Style.RESET_ALL}',
-                            ':',
-                            f'{Back.CYAN}{Fore.WHITE}{Style.BRIGHT}{match.span()}{Style.RESET_ALL}' if configuration['show_span'] else '',
-                            ':' if configuration['show_span'] else '',
-                            bytes_to_string(contents[max(0, match_start - configuration['border']):match_start]),
-                            f'{Back.RED}{Fore.WHITE}{Style.BRIGHT}{bytes_to_string(match.group())}{Style.RESET_ALL}',
-                            bytes_to_string(contents[match_end:min(contents_size, match_end + configuration['border'])]),
-                        ))
-                    else:
-                        message = ''.join((
-                            str(child),
-                            ':',
-                            f'L{line}',
-                            ':',
-                            str(match.span()) if configuration['show_span'] else '',
-                            ':' if configuration['show_span'] else '',
-                            bytes_to_string(contents[max(0, match_start - configuration['border']):match_start]),
-                            bytes_to_string(match.group()),
-                            bytes_to_string(contents[match_end:min(contents_size, match_end + configuration['border'])]),
-                        ))
+                # We estimate the line index.
+                line = contents[:match.span()[0]].count(b'\n') + 1
 
-                    print(message)
+                match_start, match_end = match.span()
 
-            searched += 1
+                if __has_colorama and not context['disable_colors']:
+                    message = ''.join((
+                        f'{Fore.MAGENTA}{child}{Style.RESET_ALL}',
+                        ':',
+                        f'{Fore.BLUE}L{line}{Style.RESET_ALL}',
+                        ':',
+                        f'{Fore.CYAN}{match.span()}{Style.RESET_ALL}' if context['show_span'] else '',
+                        ':' if context['show_span'] else '',
+                        bytes_to_string(contents[max(0, match_start - context['border']):match_start]),
+                        f'{Back.RED}{Fore.WHITE}{Style.BRIGHT}{bytes_to_string(match.group())}{Style.RESET_ALL}',
+                        bytes_to_string(contents[match_end:min(contents_size, match_end + context['border'])]),
+                    ))
+                else:
+                    message = ''.join((
+                        str(child),
+                        ':',
+                        f'L{line}',
+                        ':',
+                        str(match.span()) if context['show_span'] else '',
+                        ':' if context['show_span'] else '',
+                        bytes_to_string(contents[max(0, match_start - context['border']):match_start]),
+                        bytes_to_string(match.group()),
+                        bytes_to_string(contents[match_end:min(contents_size, match_end + context['border'])]),
+                    ))
 
-    return findings, searched
+                context['message_queue'].put(message)
+
+    context['findings_queue'].put((time(), findings))
 
 
 def bytes_to_unit_size(count):
@@ -190,6 +196,18 @@ def unit_size_to_bytes(unit_size):
     return float(match.group(1)) * table[unit or 'B']
 
 
+# Although I hate it, if this wasn't done, different print statements
+# would write to STDOUT at the same time and break everything really,
+# really badly.
+def print_messages(context):
+    while True:
+        try:
+            print(context['message_queue'].get(timeout=1))
+        except Empty:
+            if context['search_completed'].is_set():
+                break
+
+
 def main():
     parser = ArgumentParser(description='Searches the given path for exposed secrets.')
     parser.add_argument('path', help='The path to search for secrets in.')
@@ -198,8 +216,10 @@ def main():
     parser.add_argument('-i', '--include', help='A comma-separated list of file or path inclusions.')
     parser.add_argument('-p', '--show-span', action='store_true', help='Whether or not to print the span of the match.')
     parser.add_argument('-c', '--ignore-case', action='store_true', help='Whether or not to ignore the letter case during the search.')
+    parser.add_argument('-w', '--disable-colors', action='store_true', help='Whether or not to disable colored output.')
     parser.add_argument('-s', '--secrets', default=DEFAULT_SECRETS, help='A comma-separated list of target secrets (RegEx is supported).')
     parser.add_argument('-l', '--limit', default='32MB', help='The maximum size to consider searchable files.')
+    parser.add_argument('-t', '--threads', help='The amount of threads to use for searching.')
     parser.add_argument('-b', '--border', default='40', help='The amount of characters to capture around each secret match.')
     parser.add_argument('-v', '--verbosity', default=1, choices=['0', '1', '2', '3'], help='The level of verbosity to have.')
     arguments = parser.parse_args()
@@ -225,32 +245,92 @@ def main():
     if arguments.include is not None and arguments.include.strip():
         inclusions = arguments.include.split(',')
 
+    # We setup our flags and compile our secrets into RegEx to make things
+    # a little more performant.
+    flags = DOTALL
+
+    if arguments.ignore_case:
+        flags |= IGNORECASE
+
     secrets = ()
 
     if arguments.secrets is not None and arguments.secrets.strip():
-        secrets = arguments.secrets.split(',')
+        secrets = [RegEx(secret.encode(), flags=flags) for secret in arguments.secrets.split(',')]
 
-    # We setup our configuration object.
-    configuration = {
+    # We setup our context object.
+    context = {
         'secrets': secrets,
         'exclusions': exclusions,
         'inclusions': inclusions,
         'size_limit': unit_size_to_bytes(arguments.limit),
         'border': int(arguments.border),
         'verbosity': int(arguments.verbosity),
-        'ignore_case': arguments.ignore_case,
-        'show_span': arguments.show_span
+        'show_span': arguments.show_span,
+        'disable_colors': arguments.disable_colors,
+        'manifest_queue': Queue(),
+        'findings_queue': Queue(),
+        'message_queue': Queue(),
+        'search_completed': Event()
     }
 
     # Our pre-setup is done, time to begin the search!
     started_at = time()
 
-    findings, searched = recursive_search(target_path, configuration)
+    # We create a manifest for our search.
+    total_files = build_recursive_manifest(target_path, context)
 
-    if __has_colorama:
-        findings = f'{Style.BRIGHT}{Fore.GREEN if findings else Fore.RED}{findings}{Style.RESET_ALL}'
+    # We setup our worker threads (they're processes, but just pretend they're
+    # threads so I don't have to re-write this bit).
+    if arguments.threads is not None:
+        threads = int(arguments.threads)
+    else:
+        threads = cpu_count()
 
-    print('Search was completed over', searched, 'files with', findings, 'matches found.', f'(Took {time() - started_at:.2f} seconds)')
+    workers = []
+
+    for worker_id in range(threads):
+        workers.append(Process(target=recursive_search, args=(context,)))
+
+    message_worker = Process(target=print_messages, args=(context,))
+
+    # Once our workers are setup, we start them.
+    message_worker.start()
+
+    for worker in workers:
+        worker.start()
+
+    # We wait for the queue to fill-up.
+    while True:
+        if context['findings_queue'].qsize() == threads:
+            break
+
+        sleep(1)
+
+    # We end our message worker.
+    context['search_completed'].set()
+    message_worker.join()
+
+    # We calculate our findings.
+    total_findings = 0
+    latest_timestamp = None
+
+    while True:
+        try:
+            timestamp, findings = context['findings_queue'].get_nowait()
+            total_findings += findings
+
+            if latest_timestamp is None or timestamp > latest_timestamp:
+                latest_timestamp = timestamp
+        except Empty:
+            break
+
+    time_taken = latest_timestamp - started_at
+
+    # Time to make it pretty for the end-user.
+    if __has_colorama and not context['disable_colors']:
+        total_findings = f'{Style.BRIGHT}{Fore.GREEN if total_findings else Fore.RED}{total_findings}{Style.RESET_ALL}'
+
+    print('Search was completed over', total_files, 'files with', total_findings, 'matches found.', f'(Searching took {time_taken:.2f} seconds)')
 
 
 if __name__ == '__main__':
