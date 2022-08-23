@@ -214,6 +214,7 @@ def main():
     parser.add_argument('-e', '--exclude', default=DEFAULT_EXCLUSIONS, help='A comma-separated list of file or path exclusions.')
     parser.add_argument('-a', '--add-exclude', help='A comma-separated list of file or path exclusions to add to the default values.')
     parser.add_argument('-i', '--include', help='A comma-separated list of file or path inclusions.')
+    parser.add_argument('-d', '--dotall', action='store_true', help='Whether or not to use DOTALL when matching.')
     parser.add_argument('-p', '--show-span', action='store_true', help='Whether or not to print the span of the match.')
     parser.add_argument('-c', '--ignore-case', action='store_true', help='Whether or not to ignore the letter case during the search.')
     parser.add_argument('-w', '--disable-colors', action='store_true', help='Whether or not to disable colored output.')
@@ -247,7 +248,10 @@ def main():
 
     # We setup our flags and compile our secrets into RegEx to make things
     # a little more performant.
-    flags = DOTALL
+    flags = 0
+
+    if arguments.dotall:
+        flags |= DOTALL
 
     if arguments.ignore_case:
         flags |= IGNORECASE
