@@ -39,6 +39,7 @@ DEFAULT_EXCLUSIONS = ','.join((
 # This is our recommended default secret list.
 DEFAULT_SECRETS = ','.join((
     r'[\.\'"`]eyJ',
+    'API[\-_ ]*((Key)|(Token))',
     'secret',
     'sq0scp-',
     'AKIA',
