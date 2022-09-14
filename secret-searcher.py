@@ -8,6 +8,7 @@ from re import IGNORECASE, DOTALL, compile as RegEx, search
 from queue import Empty
 from multiprocessing import Queue, Event, Process, cpu_count
 from time import sleep
+from os.path import relpath as relative_path
 
 try:
     from colorama import Fore, Back, Style, init as initialize_colorama
@@ -78,6 +79,9 @@ def build_recursive_manifest(parent, context):
     total_files = 0
 
     for child in parent.iterdir():
+        if not context['full_path']:
+            child = Path(relative_path(child, '.'))
+
         if ((context['exclusions'] and check_path(child, context['exclusions'])) or
             (context['inclusions'] and not check_path(child, context['inclusions']))):
             if context['verbosity'] >= 2:
@@ -216,6 +220,7 @@ def main():
     parser.add_argument('-a', '--add-exclude', help='A comma-separated list of file or path exclusions to add to the default values.')
     parser.add_argument('-i', '--include', help='A comma-separated list of file or path inclusions.')
     parser.add_argument('-d', '--dotall', action='store_true', help='Whether or not to use DOTALL when matching.')
+    parser.add_argument('-f', '--full-path', action='store_true', help='Whether or not to print the full path-names.')
     parser.add_argument('-p', '--show-span', action='store_true', help='Whether or not to print the span of the match.')
     parser.add_argument('-c', '--ignore-case', action='store_true', help='Whether or not to ignore the letter case during the search.')
     parser.add_argument('-w', '--disable-colors', action='store_true', help='Whether or not to disable colored output.')
@@ -270,6 +275,7 @@ def main():
         'size_limit': unit_size_to_bytes(arguments.limit),
         'border': int(arguments.border),
         'verbosity': int(arguments.verbosity),
+        'full_path': arguments.full_path,
         'show_span': arguments.show_span,
         'disable_colors': arguments.disable_colors,
         'manifest_queue': Queue(),
